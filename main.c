@@ -111,8 +111,8 @@ int main(void)
             int32_t temperature = calculateTemperature(resistance);
             uint16_t targetmv = calculateTargetOutputVoltageFromTemp(temperature);
             uint16_t pwmCount = calculatePWMDutyCycleFromTargetOutputVoltage(targetmv);
-            //Timer_B_setCompareValue(TIMER_B0_BASE, TIMER_B_CAPTURECOMPARE_REGISTER_1, pwmCount);
-            HWREG16(TIMER_B0_BASE + TIMER_B_CAPTURECOMPARE_REGISTER_1 + OFS_TBxR) = pwmCount;
+            Timer_B_setCompareValue(TIMER_B0_BASE, TIMER_B_CAPTURECOMPARE_REGISTER_1, pwmCount);
+
             adcNewSample &= ~0x01;
         }
 
@@ -121,8 +121,8 @@ int main(void)
 
 uint32_t calculateResistance(uint16_t adcSample)
 {
-    int32_t samplemv = adcSample * SYS_VCC_VOLTAGE_MV / SYS_ADC_MAX_VALUE;
-    int32_t calculatedResistance = -1*SYS_ADC_INPUT_PULL_UP_R*samplemv/(samplemv-SYS_VCC_VOLTAGE_MV);
+    int32_t samplemv = (adcSample * SYS_VCC_VOLTAGE_MV) / SYS_ADC_MAX_VALUE;
+    int32_t calculatedResistance = (-1*SYS_ADC_INPUT_PULL_UP_R*samplemv)/(samplemv-SYS_VCC_VOLTAGE_MV);
     return calculatedResistance;
 }
 
@@ -195,9 +195,9 @@ int16_t calculateTemperature(uint32_t resistance)
 
      /* Now we interpolate the found index, and 1 less than the index (should be above it) */
     int32_t y1 = tempCurve[closestLower-1][1];
-    int32_t x1 = (tempCurve[closestLower-1][0]);// * 9 / 5) + 32;
+    int32_t x1 = (tempCurve[closestLower-1][0] * 9 / 5) + 32;
     int32_t y2 = tempCurve[closestLower][1];
-    int32_t x2 = (tempCurve[closestLower][0]);// * 9 / 5) + 32;
+    int32_t x2 = (tempCurve[closestLower][0] * 9 / 5) + 32;
 
     /* Shouldn't ever have the below be true */
     if (y1 <= y2)
@@ -206,8 +206,7 @@ int16_t calculateTemperature(uint32_t resistance)
     int32_t diff = y1 - y2;
     int32_t measDiff = y1 - res;
     int32_t diffX = x1 - x2;
-    double interpVal = ((measDiff / diff) * diffX) - x1;
-    interpVal += 0.5001;          // A hack to get around rounding errors since I don't have the memory for math.h
+    int32_t interpVal = x1 - ((measDiff * diffX) / diff );
     return (int16_t)(interpVal);
 }
 
@@ -222,7 +221,7 @@ uint16_t calculateTargetOutputVoltageFromTemp(int16_t temp)
 
     int32_t tempRange = SYS_PWM_MAX_TARGET_TEMP_F - SYS_PWM_MIN_TARGET_TEMP_F;
 
-    int32_t targetmv = (temp - SYS_PWM_MIN_TARGET_TEMP_F)*SYS_PWM_MAX_TARGET_VOLTAGE_MV/tempRange;
+    int32_t targetmv = ((temp - SYS_PWM_MIN_TARGET_TEMP_F)*SYS_PWM_MAX_TARGET_VOLTAGE_MV)/tempRange;
 
     if (targetmv >= SYS_PWM_MAX_TARGET_VOLTAGE_MV)
         return SYS_PWM_MAX_TARGET_VOLTAGE_MV;
@@ -243,7 +242,7 @@ uint16_t calculatePWMDutyCycleFromTargetOutputVoltage(uint16_t targetmv)
         mv = SYS_PWM_MIN_TARGET_VOLTAGE_MV;
 #endif
     /* This function will return the PWM cycle count needed to get close to the target voltage */
-    uint32_t math = mv * SYS_PWM_MAX_VALUE / SYS_VCC_VOLTAGE_MV;
+    uint32_t math = (mv * SYS_PWM_MAX_VALUE) / SYS_VCC_VOLTAGE_MV;
     if (math >= SYS_PWM_MAX_VALUE)
         return SYS_PWM_MAX_VALUE;
 
