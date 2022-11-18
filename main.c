@@ -98,7 +98,7 @@ int main(void)
         }
         if (adcNewSample & 0x02)
         {
-            /* New sample is here for input 1 for us to do some math and update the PWM output for */
+            /* New sample is here for input 2 for us to do some math and update the PWM output for */
             uint32_t resistance = calculateResistance(adcSample[1]);
             int32_t temperature = calculateTemperature(resistance);
             uint16_t targetmv = calculateTargetOutputVoltageFromTemp(temperature);
