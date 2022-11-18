@@ -27,6 +27,7 @@
 #include <msp430.h>
 #include <gpio.h>
 #include <timer_b.h>
+#include <adc.h>
 
 // Output voltage of GPIOs (for generating analog voltage output)
 #define SYS_VCC_VOLTAGE_MV                      3300
@@ -44,6 +45,7 @@
 void initClocks(void);
 void initGPIOs(void);
 void initTimers(void);
+void initADC(void);
 void timerOverflowChecker(void);
 
 /* Functions for math */
@@ -62,45 +64,24 @@ volatile uint8_t adcNewSample;
 
 int main(void)
 {
-    WDTCTL = WDTPW | WDTHOLD;                                   // Stop WDT
-    initClocks();                                               // Initialize the MCU clocks
-    initGPIOs();                                                // Initialize the device GPIOs
-
+    WDTCTL = WDTPW | WDTHOLD;                                       // Stop WDT
+    initClocks();                                                   // Initialize the MCU clocks
+    initGPIOs();                                                    // Initialize the device GPIOs
+    initADC();                                                      // Initialize the ADC
     timerOverflowCount = 0;
     adcSampleInput1 = 0;
     adcSample[0] = 0;
     adcSample[1] = 0;
     adcNewSample = 0;
 
-    initTimers();                                               // Initialize the PWM timers and ADC timers
+    initTimers();                                                   // Initialize the PWM timers and ADC timers
 
-    Timer_B_startCounter(TIMER_B0_BASE, TIMER_B_CONTINUOUS_MODE);                                           // Start the timer
+    Timer_B_startCounter(TIMER_B0_BASE, TIMER_B_CONTINUOUS_MODE);   // Start the timer
 
     // Disable the GPIO power-on default high-impedance mode to activate
     // previously configured port settings
     PM5CTL0 &= ~LOCKLPM5;
 
-
-    // Configure ADC
-    ADCCTL0 |= ADCON | ADCMSC;                                // ADCON
-    ADCCTL1 |= ADCSHP | ADCSHS_2 | ADCCONSEQ_2;               // repeat single channel; TB1.1 trig sample start
-    ADCCTL2 |= ADCRES;                                        // 10-bit conversion results
-    ADCMCTL0 |= ADCINCH_1 | ADCSREF_1;                        // A1 ADC input select; Vref=1.5V
-    ADCIE |= ADCIE0;                                          // Enable ADC conv complete interrupt
-
-    // Configure reference
-    PMMCTL0_H = PMMPW_H;                                      // Unlock the PMM registers
-    PMMCTL2 |= INTREFEN;                                      // Enable internal reference
-    __delay_cycles(400);                                      // Delay for reference settling
-
-    ADCCTL0 |= ADCENC;                                        // ADC Enable
-
-
-    // ADC conversion trigger signal - TimerB0.1 (32ms ON-period)
-    TB0CCR0 = 1024-1;                                         // PWM Period
-    TB0CCR1 = 512-1;                                          // TB1.1 ADC trigger
-    TB0CCTL1 = OUTMOD_4;                                      // TB1CCR0 toggle
-    TB0CTL = TBSSEL__ACLK | MC_1 | TBCLR;                     // ACLK, up mode
 
     while (1)
     {
@@ -115,7 +96,17 @@ int main(void)
 
             adcNewSample &= ~0x01;
         }
+        if (adcNewSample & 0x02)
+        {
+            /* New sample is here for input 1 for us to do some math and update the PWM output for */
+            uint32_t resistance = calculateResistance(adcSample[1]);
+            int32_t temperature = calculateTemperature(resistance);
+            uint16_t targetmv = calculateTargetOutputVoltageFromTemp(temperature);
+            uint16_t pwmCount = calculatePWMDutyCycleFromTargetOutputVoltage(targetmv);
+            Timer_B_setCompareValue(TIMER_B0_BASE, TIMER_B_CAPTURECOMPARE_REGISTER_2, pwmCount);
 
+            adcNewSample &= ~0x02;
+        }
     }
 }
 
@@ -253,11 +244,10 @@ void initGPIOs(void)
 {
     /* Set all pins to input with weak pull up resistor */
     GPIO_setAsInputPinWithPullDownResistor(GPIO_PORT_P1, GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7);
-    GPIO_setAsInputPinWithPullUpResistor(GPIO_PORT_P1, GPIO_PIN0);      // Except P1.0 which might have a short to VCC (for ADC reference)
     GPIO_setAsInputPinWithPullDownResistor(GPIO_PORT_P2, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7);
 
-    /* Configure ADC pins P1.3 and P1.4 as ADC inputs */
-    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN4, GPIO_TERNARY_MODULE_FUNCTION);
+    /* Configure ADC pins P1.3 and P1.4 as ADC inputs, P1.0 as VREF+ and P1.2 as VREF- */
+    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4, GPIO_TERNARY_MODULE_FUNCTION);
 
     /* Configure PWM outputs P1.6 and P1.7 as timer module outputs*/
     GPIO_setAsPeripheralModuleFunctionOutputPin(GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7, GPIO_SECONDARY_MODULE_FUNCTION);
@@ -314,6 +304,29 @@ void initTimers(void)
     Timer_B_enableInterrupt(TIMER_B0_BASE);                                                                 // Enable timer interrupts (when timer overflows)
 }
 
+void initADC(void)
+{
+    ADC_disable(ADC_BASE);
+    ADC_disableConversions(ADC_BASE, true);
+    ADC_init(ADC_BASE, ADC_SAMPLEHOLDSOURCE_SC, ADC_CLOCKSOURCE_ADCOSC, ADC_CLOCKDIVIDER_1);
+    ADC_enable(ADC_BASE);
+    ADC_setupSamplingTimer(ADC_BASE, ADC_CYCLEHOLD_16_CYCLES, false);
+    ADC_configureMemory(ADC_BASE, ADC_INPUT_A0, ADC_VREFPOS_AVCC, ADC_VREFNEG_AVSS);
+    ADC_clearInterrupt(ADC_BASE, ADC_OVERFLOW_INTERRUPT_FLAG | ADC_TIMEOVERFLOW_INTERRUPT_FLAG | ADC_ABOVETHRESHOLD_INTERRUPT_FLAG | ADC_BELOWTHRESHOLD_INTERRUPT_FLAG | ADC_INSIDEWINDOW_INTERRUPT_FLAG | ADC_COMPLETED_INTERRUPT_FLAG);
+    ADC_enableInterrupt(ADC_BASE, ADC_COMPLETED_INTERRUPT);
+}
+
+void startADCSample(uint8_t channelSelect)
+{
+    if (channelSelect == 0)
+    {
+        ADC_configureMemory(ADC_BASE, ADC_INPUT_A3, ADC_VREFPOS_AVCC, ADC_VREFNEG_AVSS);
+    } else {
+        ADC_configureMemory(ADC_BASE, ADC_INPUT_A4, ADC_VREFPOS_AVCC, ADC_VREFNEG_AVSS);
+    }
+    ADC_startConversion(ADC_BASE, ADC_SINGLECHANNEL);
+}
+
 void timerOverflowChecker(void)
 {
     timerOverflowCount++;
@@ -321,12 +334,7 @@ void timerOverflowChecker(void)
     {
         // Then we want to start an ADC sample
         adcSampleInput1 != adcSampleInput1;         // Flip which sample input is done next
-        if (adcSampleInput1)
-        {
-
-        } else {
-
-        }
+        startADCSample(adcSampleInput1);
         timerOverflowCount = 0;
     }
 }
