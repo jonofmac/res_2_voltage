@@ -244,10 +244,12 @@ void initGPIOs(void)
 {
     /* Set all pins to input with weak pull up resistor */
     GPIO_setAsInputPinWithPullDownResistor(GPIO_PORT_P1, GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7);
+    GPIO_setAsInputPinWithPullUpResistor(GPIO_PORT_P1, GPIO_PIN0);      // GPIO P1.0 gets a pull up since its connected to supply.
     GPIO_setAsInputPinWithPullDownResistor(GPIO_PORT_P2, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7);
 
     /* Configure ADC pins P1.3 and P1.4 as ADC inputs, P1.0 as VREF+ and P1.2 as VREF- */
-    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4, GPIO_TERNARY_MODULE_FUNCTION);
+    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN4, GPIO_TERNARY_MODULE_FUNCTION);
+    //GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4, GPIO_TERNARY_MODULE_FUNCTION);
 
     /* Configure PWM outputs P1.6 and P1.7 as timer module outputs*/
     GPIO_setAsPeripheralModuleFunctionOutputPin(GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7, GPIO_SECONDARY_MODULE_FUNCTION);
