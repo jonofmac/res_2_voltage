@@ -23,13 +23,14 @@
  *   - Once an ADC sample is complete, an interrupt fires to tell software to calculate the
  *     PWM duty cycle needed to achieve desired voltage based on a resistance to temperature LUT.
  */
-
+#include <driverlib.h>
 #include <msp430.h>
 #include <gpio.h>
 #include <timer_b.h>
 #include <adc.h>
 
 // Output voltage of GPIOs (for generating analog voltage output)
+//#define SYS_DEBUG_NO_TIMER_ADC                                          // Enable this if you don't want to use any timers (for debug)
 #define SYS_VCC_VOLTAGE_MV                      3300
 #define SYS_ADC_INPUT_PULL_UP_R                 2490
 #define SYS_ADC_MAX_VALUE                       1024
@@ -53,6 +54,7 @@ uint32_t calculateResistance(uint16_t adcSample);
 int16_t calculateTemperature(uint32_t resistance);
 uint16_t calculateTargetOutputVoltageFromTemp(int16_t temp);
 uint16_t calculatePWMDutyCycleFromTargetOutputVoltage(uint16_t targetmv);
+int16_t convertCtoF(int16_t tempC);
 
 /* Initialize some global variables used to start the ADC samples and which input is sampled */
 volatile uint8_t timerOverflowCount;
@@ -65,8 +67,11 @@ volatile uint8_t adcNewSample;
 int main(void)
 {
     WDTCTL = WDTPW | WDTHOLD;                                       // Stop WDT
-    initClocks();                                                   // Initialize the MCU clocks
+    //initClocks();                                                   // Initialize the MCU clocks
     initGPIOs();                                                    // Initialize the device GPIOs
+    // Disable the GPIO power-on default high-impedance mode to activate
+    // previously configured port settings
+    PM5CTL0 &= ~LOCKLPM5;
     initADC();                                                      // Initialize the ADC
     timerOverflowCount = 0;
     adcSampleInput1 = 0;
@@ -75,12 +80,10 @@ int main(void)
     adcNewSample = 0;
 
     initTimers();                                                   // Initialize the PWM timers and ADC timers
+    __bis_SR_register(GIE);
 
     Timer_B_startCounter(TIMER_B0_BASE, TIMER_B_CONTINUOUS_MODE);   // Start the timer
 
-    // Disable the GPIO power-on default high-impedance mode to activate
-    // previously configured port settings
-    PM5CTL0 &= ~LOCKLPM5;
 
 
     while (1)
@@ -112,8 +115,8 @@ int main(void)
 
 uint32_t calculateResistance(uint16_t adcSample)
 {
-    int32_t samplemv = (adcSample * SYS_VCC_VOLTAGE_MV) / SYS_ADC_MAX_VALUE;
-    int32_t calculatedResistance = (-1*SYS_ADC_INPUT_PULL_UP_R*samplemv)/(samplemv-SYS_VCC_VOLTAGE_MV);
+    int32_t samplemv = ((int32_t)adcSample * (int32_t)SYS_VCC_VOLTAGE_MV) / SYS_ADC_MAX_VALUE;
+    int32_t calculatedResistance = (-1*(int32_t)SYS_ADC_INPUT_PULL_UP_R*samplemv) /(samplemv-(int32_t)SYS_VCC_VOLTAGE_MV);
     return calculatedResistance;
 }
 
@@ -174,25 +177,25 @@ int16_t calculateTemperature(uint32_t resistance)
 
     /* A few checks for invalid corner cases */
     if (closestLower == 255)      // All values were above the measured resistance. Return last temp
-        return tempCurve[numberOfMeasurements-1][0];
+        return convertCtoF(tempCurve[numberOfMeasurements-1][0]);
 
     if (closestLower == 0)                  // If first one was lower, then we measured higher resistance than we have. Return first
-        return tempCurve[0][0];
+        return convertCtoF(tempCurve[0][0]);
 
     if (tempCurve[closestLower][1] == res)  // If an exact match, save the CPU cycles and return the value
-        return tempCurve[closestLower][0];
+        return convertCtoF(tempCurve[closestLower][0]);
 
 
 
      /* Now we interpolate the found index, and 1 less than the index (should be above it) */
     int32_t y1 = tempCurve[closestLower-1][1];
-    int32_t x1 = (tempCurve[closestLower-1][0] * 9 / 5) + 32;
+    int32_t x1 = convertCtoF(tempCurve[closestLower-1][0]);
     int32_t y2 = tempCurve[closestLower][1];
-    int32_t x2 = (tempCurve[closestLower][0] * 9 / 5) + 32;
+    int32_t x2 = convertCtoF(tempCurve[closestLower][0]);
 
     /* Shouldn't ever have the below be true */
     if (y1 <= y2)
-        return tempCurve[0][0];
+        return convertCtoF(tempCurve[0][0]);
 
     int32_t diff = y1 - y2;
     int32_t measDiff = y1 - res;
@@ -210,9 +213,9 @@ uint16_t calculateTargetOutputVoltageFromTemp(int16_t temp)
     if (temp >= SYS_PWM_MAX_TARGET_TEMP_F)
         return SYS_PWM_MAX_TARGET_VOLTAGE_MV;
 
-    int32_t tempRange = SYS_PWM_MAX_TARGET_TEMP_F - SYS_PWM_MIN_TARGET_TEMP_F;
+    int32_t tempRange = (int32_t)SYS_PWM_MAX_TARGET_TEMP_F - (int32_t)SYS_PWM_MIN_TARGET_TEMP_F;
 
-    int32_t targetmv = ((temp - SYS_PWM_MIN_TARGET_TEMP_F)*SYS_PWM_MAX_TARGET_VOLTAGE_MV)/tempRange;
+    int32_t targetmv = (((int32_t)temp - (int32_t)SYS_PWM_MIN_TARGET_TEMP_F)*(int32_t)SYS_PWM_MAX_TARGET_VOLTAGE_MV)/tempRange;
 
     if (targetmv >= SYS_PWM_MAX_TARGET_VOLTAGE_MV)
         return SYS_PWM_MAX_TARGET_VOLTAGE_MV;
@@ -221,6 +224,12 @@ uint16_t calculateTargetOutputVoltageFromTemp(int16_t temp)
 
     return (uint16_t)targetmv;
 
+}
+
+int16_t convertCtoF(int16_t tempC)
+{
+    int16_t tempF = (tempC * 9 / 5) + 32;
+    return tempF;
 }
 
 uint16_t calculatePWMDutyCycleFromTargetOutputVoltage(uint16_t targetmv)
@@ -233,7 +242,7 @@ uint16_t calculatePWMDutyCycleFromTargetOutputVoltage(uint16_t targetmv)
         mv = SYS_PWM_MIN_TARGET_VOLTAGE_MV;
 #endif
     /* This function will return the PWM cycle count needed to get close to the target voltage */
-    uint32_t math = (mv * SYS_PWM_MAX_VALUE) / SYS_VCC_VOLTAGE_MV;
+    uint32_t math = ((uint32_t)mv * (uint32_t)SYS_PWM_MAX_VALUE) / (uint32_t)SYS_VCC_VOLTAGE_MV;
     if (math >= SYS_PWM_MAX_VALUE)
         return SYS_PWM_MAX_VALUE;
 
@@ -248,11 +257,13 @@ void initGPIOs(void)
     GPIO_setAsInputPinWithPullDownResistor(GPIO_PORT_P2, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7);
 
     /* Configure ADC pins P1.3 and P1.4 as ADC inputs, P1.0 as VREF+ and P1.2 as VREF- */
+
     GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN4, GPIO_TERNARY_MODULE_FUNCTION);
     //GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4, GPIO_TERNARY_MODULE_FUNCTION);
 
     /* Configure PWM outputs P1.6 and P1.7 as timer module outputs*/
     GPIO_setAsPeripheralModuleFunctionOutputPin(GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7, GPIO_SECONDARY_MODULE_FUNCTION);
+    //GPIO_setAsPeripheralModuleFunctionOutputPin(GPIO_PORT_P2, GPIO_PIN0, GPIO_TERNARY_MODULE_FUNCTION);
 }
 
 void initClocks(void)
@@ -286,6 +297,7 @@ void initTimers(void)
 
     Timer_B_initContinuousModeParam param = { .clockSource = TIMER_B_CLOCKSOURCE_SMCLK,
                                               .clockSourceDivider = TIMER_B_CLOCKSOURCE_DIVIDER_1,
+                                              .timerInterruptEnable_TBIE = TIMER_B_TBIE_INTERRUPT_DISABLE,
                                               .startTimer = false,
                                               .timerClear = TIMER_B_DO_CLEAR
     };
@@ -303,23 +315,39 @@ void initTimers(void)
     Timer_B_setCompareValue(TIMER_B0_BASE, TIMER_B_CAPTURECOMPARE_REGISTER_2, 1);                           // Set output of TB0.2 to 1/1024 of 3.3 V = 3.2 mV
 
     Timer_B_clearTimerInterrupt(TIMER_B0_BASE);                                                             // Clear any interrupts that might be set
+#ifndef SYS_DEBUG_NO_TIMER_ADC
     Timer_B_enableInterrupt(TIMER_B0_BASE);                                                                 // Enable timer interrupts (when timer overflows)
+#endif
 }
 
 void initADC(void)
 {
     ADC_disable(ADC_BASE);
-    ADC_disableConversions(ADC_BASE, true);
-    ADC_init(ADC_BASE, ADC_SAMPLEHOLDSOURCE_SC, ADC_CLOCKSOURCE_ADCOSC, ADC_CLOCKDIVIDER_1);
+    ADC_init(ADC_BASE,
+                 ADC_SAMPLEHOLDSOURCE_SC,
+                 ADC_CLOCKSOURCE_ADCOSC,
+                 ADC_CLOCKDIVIDER_16);
+
     ADC_enable(ADC_BASE);
-    ADC_setupSamplingTimer(ADC_BASE, ADC_CYCLEHOLD_16_CYCLES, false);
-    ADC_configureMemory(ADC_BASE, ADC_INPUT_A0, ADC_VREFPOS_AVCC, ADC_VREFNEG_AVSS);
+
+    /*
+     * Base Address for the ADC Module
+     * Sample/hold for 16 clock cycles
+     * Do not enable Multiple Sampling
+     */
+    ADC_setupSamplingTimer(ADC_BASE,
+                           ADC_CYCLEHOLD_16_CYCLES,
+                           ADC_MULTIPLESAMPLESDISABLE);
+    ADC_setupSamplingTimer(ADC_BASE, ADC_CYCLEHOLD_16_CYCLES, ADC_MULTIPLESAMPLESDISABLE);
+    ADC_configureMemory(ADC_BASE, ADC_INPUT_A3, ADC_VREFPOS_AVCC, ADC_VREFNEG_AVSS);
     ADC_clearInterrupt(ADC_BASE, ADC_OVERFLOW_INTERRUPT_FLAG | ADC_TIMEOVERFLOW_INTERRUPT_FLAG | ADC_ABOVETHRESHOLD_INTERRUPT_FLAG | ADC_BELOWTHRESHOLD_INTERRUPT_FLAG | ADC_INSIDEWINDOW_INTERRUPT_FLAG | ADC_COMPLETED_INTERRUPT_FLAG);
     ADC_enableInterrupt(ADC_BASE, ADC_COMPLETED_INTERRUPT);
+
 }
 
 void startADCSample(uint8_t channelSelect)
 {
+    ADC_disableConversions(ADC_BASE, false);
     if (channelSelect == 0)
     {
         ADC_configureMemory(ADC_BASE, ADC_INPUT_A3, ADC_VREFPOS_AVCC, ADC_VREFNEG_AVSS);
@@ -327,6 +355,7 @@ void startADCSample(uint8_t channelSelect)
         ADC_configureMemory(ADC_BASE, ADC_INPUT_A4, ADC_VREFPOS_AVCC, ADC_VREFNEG_AVSS);
     }
     ADC_startConversion(ADC_BASE, ADC_SINGLECHANNEL);
+
 }
 
 void timerOverflowChecker(void)
@@ -335,7 +364,7 @@ void timerOverflowChecker(void)
     if (timerOverflowCount >= NUM_TIMER_OVERFLOWS_BETWEEN_SAMPLES)
     {
         // Then we want to start an ADC sample
-        adcSampleInput1 != adcSampleInput1;         // Flip which sample input is done next
+        adcSampleInput1 = !adcSampleInput1;         // Flip which sample input is done next
         startADCSample(adcSampleInput1);
         timerOverflowCount = 0;
     }
@@ -361,7 +390,7 @@ __interrupt void ADC_ISR(void)
             break;
         case ADCIV_ADCIFG:
             // Check if this channel has had the previous value used. Lazy semaphore
-            if (adcNewSample & (1 << adcSampleInput1) == 0)
+            if ((adcNewSample & (1 << adcSampleInput1)) == 0)
             {
                 adcSample[adcSampleInput1] = ADCMEM0;
                 adcNewSample |= (1 << adcSampleInput1);
@@ -404,6 +433,7 @@ __interrupt void TIMERB0_B1_ISR(void)
         case TB0IV_TBCCR2:          // CCR2 not used
             break;
         case TB0IV_TBIFG:           // Overflow
+            timerOverflowChecker();
             break;
         default:
             break;
