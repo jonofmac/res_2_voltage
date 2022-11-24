@@ -17,7 +17,7 @@
             <platform XML_version="1.2" id="platform_0">
                                                 
                 
-                <instance XML_version="1.2" desc="MSP430FR2111" href="devices/MSP430FR2111.xml" id="MSP430FR2111" xml="MSP430FR2111.xml" xmlpath="devices"/>
+                <instance XML_version="1.2" desc="MSP430FR2311" href="devices/MSP430FR2311.xml" id="MSP430FR2311" xml="MSP430FR2311.xml" xmlpath="devices"/>
                                             
             
             </platform>
